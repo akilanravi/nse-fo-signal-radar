@@ -31,7 +31,7 @@ class Telegram:
         self.pairs = []
 
         if not dry:
-            for number in (1, 2):
+            for number in (1,):
                 token_name = f"TELEGRAM_BOT_TOKEN_{number}"
                 chat_name = f"TELEGRAM_CHAT_ID_{number}"
                 token = os.getenv(token_name, "").strip()
