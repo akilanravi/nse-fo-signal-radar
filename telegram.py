@@ -1,4 +1,4 @@
-"""Alert-only Telegram sender. No secrets or chat IDs are logged."""
+"""Send scanner alerts through two separate Telegram bot/chat pairs."""
 import asyncio
 import logging
 import os
@@ -25,12 +25,27 @@ def batches(messages, limit=3700):
 
 class Telegram:
     def __init__(self, session, lane, dry):
-        self.session, self.dry = session, dry
-        self.token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-        self.chats = list(dict.fromkeys(x.strip() for x in os.getenv("TELEGRAM_CHAT_IDS", "").split(",") if x.strip()))
+        self.session = session
+        self.dry = dry
         self.slots = Slots(lane, cfg.TELEGRAM_SLOT_SECONDS)
-        if not dry and (not self.token or not self.chats or any(not x.lstrip("-").isdigit() for x in self.chats)):
-            raise ValueError("Missing Telegram bot token or numeric chat IDs")
+        self.pairs = []
+
+        if not dry:
+            for number in (1, 2):
+                token_name = f"TELEGRAM_BOT_TOKEN_{number}"
+                chat_name = f"TELEGRAM_CHAT_ID_{number}"
+                token = os.getenv(token_name, "").strip()
+                chat = os.getenv(chat_name, "").strip()
+
+                if not token:
+                    raise ValueError(f"Missing secret: {token_name}")
+                if not chat or not chat.lstrip("-").isdigit():
+                    raise ValueError(f"{chat_name} must be one numeric chat ID")
+
+                self.pairs.append((number, token, chat))
+
+        # Keep the existing connection test's success count working.
+        self.chats = [chat for _, _, chat in self.pairs]
 
     async def send(self, messages, deadline=None):
         if not messages:
@@ -39,30 +54,47 @@ class Telegram:
             for message in messages:
                 print("DRY_RUN " + message, flush=True)
             return 0
-        expires = deadline or time.time() + 85
+
+        expires = deadline if deadline is not None else time.time() + 85
         failed = 0
+
         for text in batches(messages):
-            for i, chat in enumerate(self.chats, 1):
+            for number, token, chat in self.pairs:
+                delivered = False
                 for attempt in range(3):
                     try:
                         await self.slots.wait(expires)
+                        remaining = expires - time.time()
+                        if remaining <= 0:
+                            log.error("telegram_failed pair=%s deadline elapsed", number)
+                            break
+
                         async with self.session.post(
-                            f"https://api.telegram.org/bot{self.token}/sendMessage",
+                            f"https://api.telegram.org/bot{token}/sendMessage",
                             json={"chat_id": chat, "text": text},
-                            timeout=aiohttp.ClientTimeout(total=6),
+                            timeout=aiohttp.ClientTimeout(total=min(6, remaining)),
                         ) as response:
                             payload = await response.json(content_type=None)
                             if response.status == 200 and payload.get("ok") is True:
+                                delivered = True
+                                log.info("telegram_ok pair=%s", number)
                                 break
+
                             if response.status == 429 and attempt < 2:
-                                delay = max(1, int(payload.get("parameters", {}).get("retry_after", 2)))
+                                delay = max(
+                                    1, int(payload.get("parameters", {}).get("retry_after", 2))
+                                )
                                 if time.time() + delay < expires:
                                     await asyncio.sleep(delay)
                                     continue
-                            log.error("telegram_failed recipient=%s HTTP=%s", i, response.status)
+
+                            log.error("telegram_failed pair=%s HTTP=%s", number, response.status)
+                            break
                     except (aiohttp.ClientError, TimeoutError, ValueError, RuntimeError) as exc:
-                        # A timeout may mean Telegram accepted the message. Don't duplicate it.
-                        log.error("telegram_failed recipient=%s type=%s", i, type(exc).__name__)
+                        log.error("telegram_failed pair=%s type=%s", number, type(exc).__name__)
+                        break
+
+                if not delivered:
                     failed += 1
-                    break
+
         return failed
