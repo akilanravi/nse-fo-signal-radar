@@ -1,0 +1,91 @@
+name: Test Dhan and Telegram
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+          cache: pip
+
+      - run: python -m pip install -r requirements.txt
+
+      - name: Verify Dhan historical data
+        env:
+          DHAN_CLIENT_ID: ${{ secrets.DHAN_CLIENT_ID }}
+          DHAN_ACCESS_TOKEN: ${{ secrets.DHAN_ACCESS_TOKEN }}
+        run: |
+          python - <<'PY'
+          import asyncio
+          import os
+          import time
+          from datetime import timedelta
+
+          import aiohttp
+          from clock import now
+          from data import APIError, Dhan
+          from instruments import Instrument
+
+          async def main():
+              async with aiohttp.ClientSession() as session:
+                  dhan = Dhan(
+                      session, os.environ["DHAN_CLIENT_ID"].strip(),
+                      os.environ["DHAN_ACCESS_TOKEN"].strip(), lane=0,
+                  )
+                  end = now()
+                  nifty = Instrument("NIFTY", "IDX_I", 13, "INDEX")
+                  bars = await dhan.candles(
+                      nifty, end - timedelta(days=10), end,
+                      deadline=time.time() + 45,
+                  )
+                  if not bars:
+                      raise SystemExit("DHAN FAILED: No completed NIFTY daily candles returned.")
+                  day = max(bars)
+                  print(f"DHAN OK | Last completed NIFTY daily candle: {day} | Close: {bars[day].c:,.2f}")
+
+          try:
+              asyncio.run(main())
+          except APIError as exc:
+              raise SystemExit(f"DHAN FAILED: {exc}") from None
+          PY
+
+      - name: Send one Telegram test to each configured chat
+        if: ${{ !cancelled() }}
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_IDS: ${{ secrets.TELEGRAM_CHAT_IDS }}
+        run: |
+          python - <<'PY'
+          import asyncio
+
+          import aiohttp
+          from telegram import Telegram
+
+          async def main():
+              async with aiohttp.ClientSession() as session:
+                  bot = Telegram(session, lane=0, dry=False)
+                  failed = await bot.send([
+                      "NSE F&O Signal Radar connection test. "
+                      "This is not a trading signal. No order placed."
+                  ])
+                  if failed:
+                      raise SystemExit(f"TELEGRAM FAILED: {failed} delivery attempt(s) failed.")
+                  print(f"TELEGRAM OK | Test accepted for {len(bot.chats)} chat(s).")
+
+          try:
+              asyncio.run(main())
+          except ValueError as exc:
+              raise SystemExit(f"TELEGRAM FAILED: {exc}") from None
+          PY
