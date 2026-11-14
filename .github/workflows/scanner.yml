@@ -1,1 +1,130 @@
+name: Dhan NSE F&O Telegram Scanner
 
+on:
+  schedule:
+    - cron: '50 3 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'dry-run = one quick check per group, live = rest of today'
+        type: choice
+        options:
+          - dry-run
+          - live
+        default: dry-run
+
+concurrency:
+  group: dhan-fo-scanner-account
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    outputs:
+      eligible: ${{ steps.plan.outputs.eligible }}
+      day: ${{ steps.plan.outputs.day }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+          cache: pip
+      - run: python -m pip install -r requirements.txt
+      - id: plan
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          MODE: ${{ inputs.mode || 'live' }}
+        run: |
+          if [ "$MODE" = "dry-run" ]; then python scanner.py prepare --dry-run
+          else python scanner.py prepare
+          fi
+      - if: steps.plan.outputs.eligible == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dhan-master-${{ github.run_id }}
+          path: .run/instruments.csv
+          include-hidden-files: true
+          retention-days: 1
+          overwrite: true
+
+  scan:
+    needs: prepare
+    if: needs.prepare.outputs.eligible == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 359
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      max-parallel: 11
+      matrix:
+        group: [g01, g02, g03, g04, g05, g06, g07, g08, g09, g10, indices]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+          cache: pip
+      - uses: actions/download-artifact@v4
+        with:
+          name: dhan-master-${{ github.run_id }}
+          path: .run
+      - run: python -m pip install -r requirements.txt
+      - name: Scan assigned group
+        env:
+          GROUP: ${{ matrix.group }}
+          DAY: ${{ needs.prepare.outputs.day }}
+          MODE: ${{ inputs.mode || 'live' }}
+          GITHUB_TOKEN: ${{ github.token }}
+          DHAN_CLIENT_ID: ${{ secrets.DHAN_CLIENT_ID }}
+          DHAN_ACCESS_TOKEN: ${{ secrets.DHAN_ACCESS_TOKEN }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_IDS: ${{ secrets.TELEGRAM_CHAT_IDS }}
+        run: |
+          if [ "$MODE" = "dry-run" ]; then
+            python scanner.py scan --group "$GROUP" --day "$DAY" --dry-run --once
+          else
+            python scanner.py scan --group "$GROUP" --day "$DAY"
+          fi
+
+  report:
+    needs: [prepare, scan]
+    if: always() && (needs.prepare.result == 'failure' || needs.prepare.outputs.eligible == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+          cache: pip
+      - run: python -m pip install -r requirements.txt
+      - name: Send consolidated status
+        env:
+          DAY: ${{ needs.prepare.outputs.day }}
+          SCAN_STATUS: ${{ needs.scan.result }}
+          PREP_STATUS: ${{ needs.prepare.result }}
+          MODE: ${{ inputs.mode || 'live' }}
+          GITHUB_TOKEN: ${{ github.token }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_IDS: ${{ secrets.TELEGRAM_CHAT_IDS }}
+        run: |
+          if [ "$MODE" = "dry-run" ]; then
+            python scanner.py report --status "prepare=$PREP_STATUS scan=$SCAN_STATUS" --dry-run
+          else
+            python scanner.py report --status "prepare=$PREP_STATUS scan=$SCAN_STATUS"
+          fi
