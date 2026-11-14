@@ -17,6 +17,7 @@ from clock import at, floor, now, trading_day
 from data import APIError, CredentialsError, Dhan, Slots
 from instruments import Instrument, MASTER, discover
 from strategy import NAMES, score, tide
+from paper_excel import write_workbook
 
 LOG = logging.getLogger("paper")
 MINUTE = timedelta(minutes=1)
@@ -315,21 +316,21 @@ async def send_file(session,path,summary):
     for attempt in range(3):
         form = aiohttp.FormData()
         form.add_field("chat_id",chat)
-        form.add_field("caption","Nightly paper replay CSV. No orders.")
-        form.add_field("document",path.read_bytes(),filename=path.name,content_type="text/csv")
+        form.add_field("caption","Nightly paper replay Excel workbook. One tab per condition. No orders.")
+        form.add_field("document",path.read_bytes(),filename=path.name,content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         async with session.post(f"https://api.telegram.org/bot{token}/sendDocument",
                                 data=form,timeout=aiohttp.ClientTimeout(total=35)) as r:
             p = await r.json(content_type=None)
             if r.status == 200 and p.get("ok") is True:
                 break
             if r.status != 429 or attempt == 2:
-                raise APIError(f"Telegram CSV rejected (HTTP {r.status})")
+                raise APIError(f"Telegram workbook rejected (HTTP {r.status})")
             await asyncio.sleep(min(30,max(1,int(p.get("parameters",{}).get("retry_after",2)))))
     from telegram import Telegram
     sender = Telegram(session,lane=0,dry=False)
     sender.slots = Slots(0,1.3,lanes=1)
     if await sender.send([summary]):
-        raise APIError("CSV delivered but Telegram summary failed")
+        raise APIError("Workbook delivered but Telegram summary failed")
 
 
 async def main():
@@ -356,10 +357,12 @@ async def main():
         (OUTPUT/"summary.txt").write_text(summary+"\n",encoding="utf-8")
         (OUTPUT/"coverage.txt").write_text("\n".join(f"{name}: {', '.join(values)}"
             for name,values in zip(("No data","Partial","Unmapped"),coverage[1:]))+"\n",encoding="utf-8")
+        workbook_path = path.with_name(f"{path.stem}-by-condition.xlsx")
+        write_workbook(workbook_path, rows, FIELDS, day)
         print(summary)
         if mode == "send":
-            await send_file(s,path,summary)
-            LOG.info("Telegram CSV and summary accepted")
+            await send_file(s,workbook_path,summary)
+            LOG.info("Telegram workbook and summary accepted")
 
 
 if __name__ == "__main__":
