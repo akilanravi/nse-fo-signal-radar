@@ -15,7 +15,7 @@ from clock import at, floor, fresh, latest, now, trading_day
 from data import APIError, CredentialsError, Dhan
 from instruments import MASTER, discover, groups, option_levels
 from state import State, transition
-from strategy import NAMES, score, tide
+from strategy import NAMES, score, supertrend_exit_flip, tide
 from telegram import Telegram
 
 log = logging.getLogger("scanner")
@@ -177,7 +177,9 @@ class Runner:
                 stale.append(inst.name)
                 continue
             key = f"{inst.segment}:{inst.sid}"
-            updated, events = transition(self.state.doc["symbols"].get(key), result, boundary)
+            previous = self.state.doc["symbols"].get(key)
+            flip = supertrend_exit_flip(ordered) if previous and previous.get("open") else 0
+            updated, events = transition(previous, result, boundary, exit_flip=flip)
             self.state.doc["symbols"][key] = updated
             for event in events:
                 action, side = event.split()
@@ -186,7 +188,7 @@ class Runner:
                     messages.append(fmt(inst, frame[target], prices.get((inst.segment,inst.sid)),
                                         result, side, boundary, self.chains[inst.key]))
                 else:
-                    messages.append(f"{event} | {inst.name} | {boundary:%H:%M} IST | Supertrend reversal"
+                    messages.append(f"{event} | {inst.name} | {boundary:%H:%M} IST | Supertrend ({cfg.SUPERTREND_EXIT_LEN},{cfg.SUPERTREND_EXIT_MULT:g}) reversal"
                                     f" | Close {frame[target].c:,.2f} | No order")
         self.state.doc["scans"] += 1
         self.state.doc["last_scan"] = boundary.isoformat()

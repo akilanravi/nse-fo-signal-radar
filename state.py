@@ -79,7 +79,7 @@ class State:
         raise StateError("Could not checkpoint scanner-state after retries")
 
 
-def transition(previous, result, close, cooldown=cfg.COOLDOWN_MINUTES):
+def transition(previous, result, close, cooldown=cfg.COOLDOWN_MINUTES, *, exit_flip=None):
     """Return new state and events. A new setup may requalify after dropping below 7."""
     old = dict(previous or {})
     stamp = close.isoformat()
@@ -87,10 +87,15 @@ def transition(previous, result, close, cooldown=cfg.COOLDOWN_MINUTES):
         return old, []
     side, opened = result.side(), old.get("open", "")
     events = []
-    if opened and ((opened == "CE" and result.st < 0) or (opened == "PE" and result.st > 0)):
+    # None preserves the legacy API for other callers. The live scanner always
+    # supplies the fast flip, including 0 when its direction did not change.
+    exit_direction = result.st if exit_flip is None else exit_flip
+    exited = ""
+    if opened and ((opened == "CE" and exit_direction < 0) or (opened == "PE" and exit_direction > 0)):
+        exited = opened
         events.append("EXIT " + opened)
         opened = ""
-    if side:
+    if side and side != exited:
         checks = result.ce if side == "CE" else result.pe
         count = sum(x is True for x in checks)
         previous_alert = old.get("alert_at")
@@ -100,7 +105,7 @@ def transition(previous, result, close, cooldown=cfg.COOLDOWN_MINUTES):
             events.append("BUY " + side)
             old.update(alert_at=stamp, tier=count, open=side)
             opened = side
-    else:
+    elif not side:
         old["tier"] = 0
     old.update(bar=stamp, active=side, open=opened)
     return old, events

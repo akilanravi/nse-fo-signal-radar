@@ -39,17 +39,17 @@ def tide(bars, daily, day):
     return int(closes[-1] > tc and fast > slow) - int(closes[-1] < bc and fast < slow)
 
 
-def rsi_st(bars):
+def rsi_st(bars, length=cfg.SUPERTREND_LEN, multiplier=cfg.SUPERTREND_MULT):
     b = bars[0]
     atr = b.h - b.l
     middle = (b.h + b.l) / 2
-    upper, lower = middle + cfg.SUPERTREND_MULT * atr, middle - cfg.SUPERTREND_MULT * atr
+    upper, lower = middle + multiplier * atr, middle - multiplier * atr
     st, prev, gain, loss = 1, b.c, None, None
     for b in bars[1:]:
         tr = max(b.h - b.l, abs(b.h - prev), abs(b.l - prev))
-        atr += (tr - atr) / cfg.SUPERTREND_LEN
+        atr += (tr - atr) / length
         middle = (b.h + b.l) / 2
-        u, l = middle + cfg.SUPERTREND_MULT * atr, middle - cfg.SUPERTREND_MULT * atr
+        u, l = middle + multiplier * atr, middle - multiplier * atr
         upper = u if u < upper or prev > upper else upper
         lower = l if l > lower or prev < lower else lower
         st = (-1 if b.c < lower else 1) if st == 1 else (1 if b.c > upper else -1)
@@ -58,6 +58,16 @@ def rsi_st(bars):
         loss = down if loss is None else loss + (down - loss) / cfg.RSI_LEN
         prev = b.c
     return (100 if loss == 0 else 100 - 100 / (1 + gain / loss)), st
+
+
+def supertrend_exit_flip(bars):
+    """Return the new direction on an actual fast Supertrend flip, otherwise 0."""
+    if len(bars) <= cfg.SUPERTREND_EXIT_LEN:
+        return 0
+    args = cfg.SUPERTREND_EXIT_LEN, cfg.SUPERTREND_EXIT_MULT
+    previous = rsi_st(bars[:-1], *args)[1]
+    current = rsi_st(bars, *args)[1]
+    return current if current != previous else 0
 
 
 @dataclass(frozen=True)
