@@ -1,0 +1,41 @@
+name: Morning F&O Watchlist
+
+on:
+  schedule:
+    - cron: '47 2 * * 1-5' # 08:17 IST, 05:47 Saudi time
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'preview logs the report without Telegram; live sends only during the morning window'
+        type: choice
+        options: [preview, live]
+        default: preview
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nse-fo-morning-watchlist
+  cancel-in-progress: false
+
+jobs:
+  watchlist:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+          cache: pip
+      - run: python -m pip install -r requirements.txt
+      - name: Build and deliver morning watchlist
+        env:
+          WATCHLIST_MODE: ${{ inputs.mode || 'live' }}
+          DHAN_CLIENT_ID: ${{ secrets.DHAN_CLIENT_ID }}
+          DHAN_ACCESS_TOKEN: ${{ secrets.DHAN_ACCESS_TOKEN }}
+          TELEGRAM_BOT_TOKEN_1: ${{ secrets.TELEGRAM_BOT_TOKEN_1 }}
+          TELEGRAM_CHAT_ID_1: ${{ secrets.TELEGRAM_CHAT_ID_1 }}
+        run: python morning_watchlist.py
