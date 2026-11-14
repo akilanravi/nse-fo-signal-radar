@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'preview uploads CSV only; send also sends it to your configured Telegram chat'
+        description: 'preview saves Excel and CSV to Actions; send also sends Excel to Telegram'
         type: choice
         options: [preview, send]
         default: preview
@@ -26,7 +26,10 @@ jobs:
         with:
           python-version: '3.13'
           cache: pip
-      - run: python -m pip install -r requirements.txt
+          cache-dependency-path: |
+            requirements.txt
+            requirements-paper.txt
+      - run: python -m pip install -r requirements.txt -r requirements-paper.txt
       - name: Replay recorded Dhan candles
         env:
           PAPER_MODE: ${{ inputs.mode || 'send' }}
@@ -36,7 +39,7 @@ jobs:
           TELEGRAM_BOT_TOKEN_1: ${{ secrets.TELEGRAM_BOT_TOKEN_1 }}
           TELEGRAM_CHAT_ID_1: ${{ secrets.TELEGRAM_CHAT_ID_1 }}
         run: python -u paper_replay.py
-      - name: Save paper results and trade CSV
+      - name: Save Excel workbook, trade CSV and diagnostics
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
