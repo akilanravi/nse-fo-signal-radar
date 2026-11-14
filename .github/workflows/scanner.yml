@@ -120,8 +120,10 @@ jobs:
           PREP_STATUS: ${{ needs.prepare.result }}
           MODE: ${{ inputs.mode || 'live' }}
           GITHUB_TOKEN: ${{ github.token }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_IDS: ${{ secrets.TELEGRAM_CHAT_IDS }}
+          TELEGRAM_BOT_TOKEN_1: ${{ secrets.TELEGRAM_BOT_TOKEN_1 }}
+          TELEGRAM_CHAT_ID_1: ${{ secrets.TELEGRAM_CHAT_ID_1 }}
+          TELEGRAM_BOT_TOKEN_2: ${{ secrets.TELEGRAM_BOT_TOKEN_2 }}
+          TELEGRAM_CHAT_ID_2: ${{ secrets.TELEGRAM_CHAT_ID_2 }}
         run: |
           if [ "$MODE" = "dry-run" ]; then
             python scanner.py report --status "prepare=$PREP_STATUS scan=$SCAN_STATUS" --dry-run
